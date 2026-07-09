@@ -1,7 +1,7 @@
+#include "platform/linux/platform.h"
 #include "runtime/execution_loop.h"
 
 #include <errno.h>
-#include <signal.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -11,14 +11,6 @@
 #define TEAR_SOCKET_PATH "/tmp/tear.sock"
 #define TEAR_REQUEST_MAX 128
 #define TEAR_RESPONSE_MAX 128
-
-static volatile sig_atomic_t keep_running = 1;
-
-static void handle_signal(int signo)
-{
-    (void)signo;
-    keep_running = 0;
-}
 
 static int create_server_socket(void)
 {
@@ -76,8 +68,10 @@ static void handle_client(int client_fd)
 
 int main(void)
 {
-    signal(SIGINT, handle_signal);
-    signal(SIGTERM, handle_signal);
+    if (tear_platform_setup_signal_handlers() != 0) {
+        perror("signal setup");
+        return 1;
+    }
 
     int server_fd = create_server_socket();
     if (server_fd < 0) {
@@ -86,9 +80,13 @@ int main(void)
 
     fprintf(stderr, "[teard] listening on %s\n", TEAR_SOCKET_PATH);
 
-    while (keep_running) {
+    while (!tear_platform_should_stop()) {
         int client_fd = accept(server_fd, NULL, NULL);
         if (client_fd < 0) {
+            if (errno == EINTR && tear_platform_should_stop()) {
+                break;
+            }
+
             if (errno == EINTR) {
                 continue;
             }
@@ -100,6 +98,8 @@ int main(void)
         handle_client(client_fd);
         close(client_fd);
     }
+
+    fprintf(stderr, "[teard] stopping\n");
 
     close(server_fd);
     unlink(TEAR_SOCKET_PATH);
